@@ -1,0 +1,149 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: payflow
+      POSTGRES_PASSWORD: payflow
+      POSTGRES_DB: payflow
+    volumes:
+      - ../../../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - payflow
+
+  kafka:
+    image: bitnami/kafka:latest
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - payflow
+
+  gateway-stub:
+    build:
+      context: ../../../../infra/gateway-stub
+    ports:
+      - "9999:9999"
+    environment:
+      PORT: "9999"
+      STUB_FAILURE_RATE: "0.1"
+    networks:
+      - payflow
+
+  api-gateway:
+    build:
+      context: ../../api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      ORCHESTRATOR_URL: http://payment-orchestrator:8081
+    depends_on:
+      payment-orchestrator:
+        condition: service_started
+    networks:
+      - payflow
+
+  payment-orchestrator:
+    build:
+      context: ../../payment-orchestrator
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: Host=postgres;Port=5432;Database=payflow;Username=payflow;Password=payflow
+      KAFKA_BROKERS: kafka:9092
+      FRAUD_SERVICE_URL: http://fraud-detection:8082
+      PROCESSOR_SERVICE_URL: http://payment-processor:8083
+      SETTLEMENT_SERVICE_URL: http://settlement-service:8084
+      FRAUD_TIMEOUT_MS: "5000"
+      PROCESSOR_TIMEOUT_MS: "10000"
+      SETTLEMENT_TIMEOUT_MS: "5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - payflow
+
+  fraud-detection:
+    build:
+      context: ../../fraud-detection
+    ports:
+      - "8082:8082"
+    environment:
+      FRAUD_LATENCY_MS: "0"
+    networks:
+      - payflow
+
+  payment-processor:
+    build:
+      context: ../../payment-processor
+    ports:
+      - "8083:8083"
+    environment:
+      GATEWAY_STUB_URL: http://gateway-stub:9999
+    depends_on:
+      - gateway-stub
+    networks:
+      - payflow
+
+  settlement-service:
+    build:
+      context: ../../settlement-service
+    ports:
+      - "8084:8084"
+    environment:
+      DATABASE_URL: Host=postgres;Port=5432;Database=payflow;Username=payflow;Password=payflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - payflow
+
+  notification-service:
+    build:
+      context: ../../notification-service
+    ports:
+      - "8085:8085"
+    environment:
+      DATABASE_URL: Host=postgres;Port=5432;Database=payflow;Username=payflow;Password=payflow
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - payflow
+
+  traffic-generator:
+    build:
+      context: ../../../../infra/traffic-generator
+    environment:
+      GATEWAY_URL: http://api-gateway:8080
+      REQUESTS_PER_SECOND: "10"
+      CONCURRENCY: "5"
+      DURATION_SECONDS: "0"
+    depends_on:
+      - api-gateway
+    networks:
+      - payflow
+
+networks:
+  payflow:
+    driver: bridge

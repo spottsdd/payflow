@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-detection
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-detection
+  template:
+    metadata:
+      labels:
+        app: fraud-detection
+    spec:
+      containers:
+        - name: fraud-detection
+          image: payflow/fraud-detection:latest
+          ports:
+            - containerPort: 8082
+          env:
+            - name: PORT
+              value: "8082"
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-detection
+  namespace: payflow
+spec:
+  selector:
+    app: fraud-detection
+  ports:
+    - port: 8082
+      targetPort: 8082

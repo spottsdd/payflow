@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payflow-config
+  namespace: payflow
+data:
+  KAFKA_BROKERS: kafka:9092
+  ORCHESTRATOR_URL: http://payment-orchestrator:8081
+  FRAUD_SERVICE_URL: http://fraud-detection:8082
+  PROCESSOR_SERVICE_URL: http://payment-processor:8083
+  SETTLEMENT_SERVICE_URL: http://settlement-service:8084
+  GATEWAY_STUB_URL: http://gateway-stub:9999
+  FRAUD_LATENCY_MS: "0"
+  FRAUD_TIMEOUT_MS: "5000"
+  PROCESSOR_TIMEOUT_MS: "10000"
+  SETTLEMENT_TIMEOUT_MS: "5000"
+  PORT_API_GATEWAY: "8080"
+  PORT_ORCHESTRATOR: "8081"
+  PORT_FRAUD: "8082"
+  PORT_PROCESSOR: "8083"
+  PORT_SETTLEMENT: "8084"
+  PORT_NOTIFICATION: "8085"

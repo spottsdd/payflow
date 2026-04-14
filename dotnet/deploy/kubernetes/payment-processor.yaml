@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-processor
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-processor
+  template:
+    metadata:
+      labels:
+        app: payment-processor
+    spec:
+      containers:
+        - name: payment-processor
+          image: payflow-dotnet-payment-processor:latest
+          ports:
+            - containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8083
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-processor
+  namespace: payflow
+spec:
+  selector:
+    app: payment-processor
+  ports:
+    - port: 8083
+      targetPort: 8083
+  type: ClusterIP

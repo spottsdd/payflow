@@ -1,0 +1,192 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: payflow
+      POSTGRES_PASSWORD: payflow
+      POSTGRES_DB: payflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: bitnami/kafka:3.6
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  gateway-stub:
+    image: mockserver/mockserver:latest
+    environment:
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/mockserver.json
+    ports:
+      - "9999:1080"
+    volumes:
+      - ./mockserver.json:/config/mockserver.json
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:1080/mockserver/status || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api-gateway:
+    build:
+      context: ../../api-gateway
+    image: payflow-ruby-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      ORCHESTRATOR_URL: http://payment-orchestrator:8081
+    depends_on:
+      payment-orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  payment-orchestrator:
+    build:
+      context: ../../payment-orchestrator
+    image: payflow-ruby-payment-orchestrator
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      DATABASE_URL: postgresql://payflow:payflow@postgres:5432/payflow
+      KAFKA_BROKERS: kafka:9092
+      FRAUD_SERVICE_URL: http://fraud-detection:8082
+      PROCESSOR_SERVICE_URL: http://payment-processor:8083
+      SETTLEMENT_SERVICE_URL: http://settlement-service:8084
+      FRAUD_TIMEOUT_MS: "5000"
+      PROCESSOR_TIMEOUT_MS: "10000"
+      SETTLEMENT_TIMEOUT_MS: "5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      fraud-detection:
+        condition: service_healthy
+      payment-processor:
+        condition: service_healthy
+      settlement-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  fraud-detection:
+    build:
+      context: ../../fraud-detection
+    image: payflow-ruby-fraud-detection
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      FRAUD_LATENCY_MS: "0"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  payment-processor:
+    build:
+      context: ../../payment-processor
+    image: payflow-ruby-payment-processor
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      GATEWAY_STUB_URL: http://gateway-stub:1080
+    depends_on:
+      gateway-stub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  settlement-service:
+    build:
+      context: ../../settlement-service
+    image: payflow-ruby-settlement-service
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      DATABASE_URL: postgresql://payflow:payflow@postgres:5432/payflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8084/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  notification-service:
+    build:
+      context: ../../notification-service
+    image: payflow-ruby-notification-service
+    ports:
+      - "8085:8085"
+    environment:
+      PORT: "8085"
+      DATABASE_URL: postgresql://payflow:payflow@postgres:5432/payflow
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  traffic-generator:
+    image: curlimages/curl:latest
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          curl -sf -X POST http://api-gateway:8080/payments \
+            -H 'Content-Type: application/json' \
+            -d '{"from_account_id":"00000000-0000-0000-0000-000000000001","to_account_id":"00000000-0000-0000-0000-000000000002","amount":100.00,"currency":"USD"}' \
+            || true
+          sleep 5
+        done
+
+volumes:
+  postgres_data:

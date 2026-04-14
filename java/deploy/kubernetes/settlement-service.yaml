@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: settlement-service
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: settlement-service
+  template:
+    metadata:
+      labels:
+        app: settlement-service
+    spec:
+      containers:
+        - name: settlement-service
+          image: settlement-service:latest
+          ports:
+            - containerPort: 8084
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8084
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: 250m
+            requests:
+              memory: 128Mi
+              cpu: 125m
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+            - secretRef:
+                name: payflow-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: settlement-service
+  namespace: payflow
+spec:
+  selector:
+    app: settlement-service
+  ports:
+    - port: 80
+      targetPort: 8084

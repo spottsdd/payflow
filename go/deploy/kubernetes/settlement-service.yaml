@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: settlement-service
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: settlement-service
+  template:
+    metadata:
+      labels:
+        app: settlement-service
+    spec:
+      containers:
+        - name: settlement-service
+          image: payflow/settlement-service:latest
+          ports:
+            - containerPort: 8084
+          env:
+            - name: PORT
+              value: "8084"
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+            - secretRef:
+                name: payflow-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: settlement-service
+  namespace: payflow
+spec:
+  selector:
+    app: settlement-service
+  ports:
+    - port: 8084
+      targetPort: 8084

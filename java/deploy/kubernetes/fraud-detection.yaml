@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-detection
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-detection
+  template:
+    metadata:
+      labels:
+        app: fraud-detection
+    spec:
+      containers:
+        - name: fraud-detection
+          image: fraud-detection:latest
+          ports:
+            - containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: 250m
+            requests:
+              memory: 128Mi
+              cpu: 125m
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+            - secretRef:
+                name: payflow-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-detection
+  namespace: payflow
+spec:
+  selector:
+    app: fraud-detection
+  ports:
+    - port: 80
+      targetPort: 8082

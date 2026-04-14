@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-processor
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-processor
+  template:
+    metadata:
+      labels:
+        app: payment-processor
+    spec:
+      containers:
+        - name: payment-processor
+          image: payflow/payment-processor:latest
+          ports:
+            - containerPort: 8083
+          env:
+            - name: PORT
+              value: "8083"
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-processor
+  namespace: payflow
+spec:
+  selector:
+    app: payment-processor
+  ports:
+    - port: 8083
+      targetPort: 8083

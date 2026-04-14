@@ -1,0 +1,187 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: payflow
+      POSTGRES_PASSWORD: payflow
+      POSTGRES_DB: payflow
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payflow -d payflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:latest
+    environment:
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  gateway-stub:
+    image: node:24-slim
+    command: >
+      node -e "
+      const http=require('http');const crypto=require('crypto');
+      http.createServer((req,res)=>{
+        res.writeHead(200,{'Content-Type':'application/json'});
+        res.end(JSON.stringify({status:'APPROVED',transaction_id:crypto.randomUUID()}));
+      }).listen(9999,'0.0.0.0',()=>console.log('gateway-stub on 9999'));
+      "
+    ports:
+      - "9999:9999"
+
+  fraud-detection:
+    build:
+      context: ../../fraud-detection
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      FRAUD_LATENCY_MS: "0"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  payment-processor:
+    build:
+      context: ../../payment-processor
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      GATEWAY_STUB_URL: http://gateway-stub:9999
+    depends_on:
+      - gateway-stub
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  settlement-service:
+    build:
+      context: ../../settlement-service
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      DATABASE_URL: postgresql://payflow:payflow@postgres:5432/payflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8084/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  payment-orchestrator:
+    build:
+      context: ../../payment-orchestrator
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      DATABASE_URL: postgresql://payflow:payflow@postgres:5432/payflow
+      KAFKA_BROKERS: kafka:9092
+      FRAUD_SERVICE_URL: http://fraud-detection:8082
+      PROCESSOR_SERVICE_URL: http://payment-processor:8083
+      SETTLEMENT_SERVICE_URL: http://settlement-service:8084
+      FRAUD_TIMEOUT_MS: "5000"
+      PROCESSOR_TIMEOUT_MS: "10000"
+      SETTLEMENT_TIMEOUT_MS: "5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      fraud-detection:
+        condition: service_healthy
+      payment-processor:
+        condition: service_healthy
+      settlement-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  notification-service:
+    build:
+      context: ../../notification-service
+    ports:
+      - "8085:8085"
+    environment:
+      PORT: "8085"
+      DATABASE_URL: postgresql://payflow:payflow@postgres:5432/payflow
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: ../../api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      ORCHESTRATOR_URL: http://payment-orchestrator:8081
+    depends_on:
+      payment-orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  traffic-generator:
+    image: node:24-slim
+    restart: on-failure
+    command: >
+      node -e "
+      const http=require('http');
+      function send(){
+        const body=JSON.stringify({
+          from_account_id:'11111111-1111-1111-1111-111111111111',
+          to_account_id:'22222222-2222-2222-2222-222222222222',
+          amount:Math.floor(Math.random()*5000)+1,
+          currency:'USD'
+        });
+        const opts={host:'api-gateway',port:8080,path:'/payments',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}};
+        const req=http.request(opts,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log(new Date().toISOString(),res.statusCode,d.slice(0,120)));});
+        req.on('error',e=>console.error(e.message));
+        req.write(body);
+        req.end();
+      }
+      setInterval(send,2000);
+      "
+    depends_on:
+      api-gateway:
+        condition: service_healthy
