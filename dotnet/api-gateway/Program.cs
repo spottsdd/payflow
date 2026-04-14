@@ -1,79 +1,87 @@
-using System.Net.Http.Json;
+using System.Text.Json;
+using ApiGateway;
+
+static void Log(string level, string service, string message, object? extra = null)
+{
+    var entry = new Dictionary<string, object?>
+    {
+        ["timestamp"] = DateTime.UtcNow.ToString("o"),
+        ["level"] = level,
+        ["service"] = service,
+        ["message"] = message,
+        ["trace_id"] = "",
+        ["span_id"] = "",
+    };
+    if (extra != null)
+        foreach (var prop in extra.GetType().GetProperties())
+            entry[prop.Name] = prop.GetValue(extra);
+    Console.WriteLine(JsonSerializer.Serialize(entry));
+}
+
+var jsonOpts = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    PropertyNameCaseInsensitive = true,
+};
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(options =>
+builder.Services.ConfigureHttpJsonOptions(o =>
 {
-    options.JsonWriterOptions = new() { Indented = false };
-    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+    o.SerializerOptions.PropertyNameCaseInsensitive = true;
 });
-builder.Services.AddHttpClient();
+
+var orchestratorUrl = Environment.GetEnvironmentVariable("ORCHESTRATOR_URL")
+    ?? "http://payment-orchestrator:8081";
+
+builder.Services.AddHttpClient("orchestrator", c =>
+    c.BaseAddress = new Uri(orchestratorUrl));
 
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-app.MapPost("/payments", async (PaymentRequest req, IHttpClientFactory factory, IConfiguration config, ILogger<Program> logger) =>
+app.MapPost("/payments", async (HttpContext ctx, IHttpClientFactory factory) =>
 {
-    if (string.IsNullOrEmpty(req.from_account_id) ||
-        string.IsNullOrEmpty(req.to_account_id) ||
-        string.IsNullOrEmpty(req.currency) ||
-        req.amount <= 0 ||
-        req.currency.Length != 3 ||
-        req.from_account_id == req.to_account_id)
-    {
-        return Results.BadRequest(new { error = "invalid payment request" });
-    }
-
-    using var scope = logger.BeginScope(new Dictionary<string, object>
-    {
-        ["service"] = "api-gateway",
-        ["trace_id"] = "",
-        ["span_id"] = ""
-    });
-
-    var orchestratorUrl = config["ORCHESTRATOR_URL"] ?? "http://payment-orchestrator:8081";
-    var client = factory.CreateClient();
-
+    PaymentRequest? req;
     try
     {
-        var response = await client.PostAsJsonAsync($"{orchestratorUrl}/payments", req);
-        var body = await response.Content.ReadAsStringAsync();
-        return Results.Content(body, "application/json", statusCode: (int)response.StatusCode);
+        req = await ctx.Request.ReadFromJsonAsync<PaymentRequest>(jsonOpts);
     }
-    catch (Exception ex)
+    catch
     {
-        logger.LogError(ex, "Failed to forward payment to orchestrator");
-        return Results.Problem("service unavailable", statusCode: 503);
+        return Results.BadRequest(new { error = "invalid request body" });
     }
+
+    if (req is null)
+        return Results.BadRequest(new { error = "request body required" });
+    if (req.FromAccountId is null)
+        return Results.BadRequest(new { error = "from_account_id is required" });
+    if (req.ToAccountId is null)
+        return Results.BadRequest(new { error = "to_account_id is required" });
+    if (req.Amount is null || req.Amount <= 0)
+        return Results.BadRequest(new { error = "amount must be greater than 0" });
+    if (string.IsNullOrEmpty(req.Currency) || req.Currency.Length != 3)
+        return Results.BadRequest(new { error = "currency must be 3 characters" });
+    if (req.FromAccountId == req.ToAccountId)
+        return Results.BadRequest(new { error = "from_account_id and to_account_id must be different" });
+
+    Log("INFO", "api-gateway", "forwarding payment request",
+        new { amount = req.Amount, currency = req.Currency });
+
+    var client = factory.CreateClient("orchestrator");
+    var resp = await client.PostAsJsonAsync("/payments", req, jsonOpts);
+    var body = await resp.Content.ReadAsStringAsync();
+    return Results.Content(body, "application/json", null, (int)resp.StatusCode);
 });
 
-app.MapGet("/payments/{id}", async (string id, IHttpClientFactory factory, IConfiguration config, ILogger<Program> logger) =>
+app.MapGet("/payments/{id}", async (string id, IHttpClientFactory factory) =>
 {
-    using var scope = logger.BeginScope(new Dictionary<string, object>
-    {
-        ["service"] = "api-gateway",
-        ["trace_id"] = "",
-        ["span_id"] = ""
-    });
-
-    var orchestratorUrl = config["ORCHESTRATOR_URL"] ?? "http://payment-orchestrator:8081";
-    var client = factory.CreateClient();
-
-    try
-    {
-        var response = await client.GetAsync($"{orchestratorUrl}/payments/{id}");
-        var body = await response.Content.ReadAsStringAsync();
-        return Results.Content(body, "application/json", statusCode: (int)response.StatusCode);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to fetch payment {PaymentId}", id);
-        return Results.Problem("service unavailable", statusCode: 503);
-    }
+    var client = factory.CreateClient("orchestrator");
+    var resp = await client.GetAsync($"/payments/{id}");
+    var body = await resp.Content.ReadAsStringAsync();
+    return Results.Content(body, "application/json", null, (int)resp.StatusCode);
 });
 
 app.Run();
-
-record PaymentRequest(string from_account_id, string to_account_id, decimal amount, string currency);

@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=builder /app .
 EXPOSE 8085
 ENV ASPNETCORE_URLS=http://+:8085
-ENTRYPOINT ["dotnet", "NotificationService.dll"]
+CMD ["dotnet", "NotificationService.dll"]

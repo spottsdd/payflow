@@ -15,30 +15,31 @@ spec:
     spec:
       containers:
         - name: notification-service
-          image: payflow-dotnet-notification-service:latest
+          image: payflow/notification-service:latest
           ports:
             - containerPort: 8085
-          envFrom:
-            - configMapRef:
-                name: payflow-config
-            - secretRef:
-                name: payflow-secret
+          env:
+            - name: ASPNETCORE_URLS
+              value: http://+:8085
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payflow-secrets
+                  key: DATABASE_URL
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: payflow-config
+                  key: KAFKA_BROKERS
           livenessProbe:
             httpGet:
               path: /health
               port: 8085
             initialDelaySeconds: 10
             periodSeconds: 15
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: notification-service
-  namespace: payflow
-spec:
-  selector:
-    app: notification-service
-  ports:
-    - port: 8085
-      targetPort: 8085
-  type: ClusterIP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 5
+            periodSeconds: 10

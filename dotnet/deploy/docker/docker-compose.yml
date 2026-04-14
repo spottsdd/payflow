@@ -1,49 +1,60 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
+      POSTGRES_DB: payflow
       POSTGRES_USER: payflow
       POSTGRES_PASSWORD: payflow
-      POSTGRES_DB: payflow
+    ports:
+      - "5432:5432"
     volumes:
-      - ../../../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U payflow"]
+      test: ["CMD-SHELL", "pg_isready -U payflow -d payflow"]
       interval: 5s
       timeout: 5s
       retries: 10
-    networks:
-      - payflow
 
   kafka:
-    image: bitnami/kafka:latest
+    image: bitnami/kafka:3.7
     environment:
-      - KAFKA_CFG_NODE_ID=0
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
     healthcheck:
-      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
       interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    networks:
-      - payflow
+      timeout: 10s
+      retries: 10
 
   gateway-stub:
-    build:
-      context: ../../../../infra/gateway-stub
+    image: python:3.12-alpine
+    command: >
+      python -c "
+      import http.server, json, uuid
+      class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+          self.send_response(200)
+          self.send_header('Content-Type', 'application/json')
+          self.end_headers()
+          self.wfile.write(json.dumps({'status':'APPROVED','transaction_id':str(uuid.uuid4())}).encode())
+        def log_message(self, *args): pass
+      http.server.HTTPServer(('', 9999), H).serve_forever()
+      "
     ports:
       - "9999:9999"
-    environment:
-      PORT: "9999"
-      STUB_FAILURE_RATE: "0.1"
-    networks:
-      - payflow
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9999/health')\" || exit 0"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   api-gateway:
     build:
@@ -51,12 +62,16 @@ services:
     ports:
       - "8080:8080"
     environment:
+      ASPNETCORE_URLS: http://+:8080
       ORCHESTRATOR_URL: http://payment-orchestrator:8081
     depends_on:
       payment-orchestrator:
-        condition: service_started
-    networks:
-      - payflow
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   payment-orchestrator:
     build:
@@ -64,7 +79,8 @@ services:
     ports:
       - "8081:8081"
     environment:
-      DATABASE_URL: Host=postgres;Port=5432;Database=payflow;Username=payflow;Password=payflow
+      ASPNETCORE_URLS: http://+:8081
+      DATABASE_URL: Host=postgres;Database=payflow;Username=payflow;Password=payflow
       KAFKA_BROKERS: kafka:9092
       FRAUD_SERVICE_URL: http://fraud-detection:8082
       PROCESSOR_SERVICE_URL: http://payment-processor:8083
@@ -77,8 +93,17 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    networks:
-      - payflow
+      fraud-detection:
+        condition: service_healthy
+      payment-processor:
+        condition: service_healthy
+      settlement-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   fraud-detection:
     build:
@@ -86,9 +111,13 @@ services:
     ports:
       - "8082:8082"
     environment:
+      ASPNETCORE_URLS: http://+:8082
       FRAUD_LATENCY_MS: "0"
-    networks:
-      - payflow
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   payment-processor:
     build:
@@ -96,11 +125,16 @@ services:
     ports:
       - "8083:8083"
     environment:
+      ASPNETCORE_URLS: http://+:8083
       GATEWAY_STUB_URL: http://gateway-stub:9999
     depends_on:
-      - gateway-stub
-    networks:
-      - payflow
+      gateway-stub:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   settlement-service:
     build:
@@ -108,12 +142,16 @@ services:
     ports:
       - "8084:8084"
     environment:
-      DATABASE_URL: Host=postgres;Port=5432;Database=payflow;Username=payflow;Password=payflow
+      ASPNETCORE_URLS: http://+:8084
+      DATABASE_URL: Host=postgres;Database=payflow;Username=payflow;Password=payflow
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - payflow
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   notification-service:
     build:
@@ -121,29 +159,37 @@ services:
     ports:
       - "8085:8085"
     environment:
-      DATABASE_URL: Host=postgres;Port=5432;Database=payflow;Username=payflow;Password=payflow
+      ASPNETCORE_URLS: http://+:8085
+      DATABASE_URL: Host=postgres;Database=payflow;Username=payflow;Password=payflow
       KAFKA_BROKERS: kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    networks:
-      - payflow
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   traffic-generator:
-    build:
-      context: ../../../../infra/traffic-generator
-    environment:
-      GATEWAY_URL: http://api-gateway:8080
-      REQUESTS_PER_SECOND: "10"
-      CONCURRENCY: "5"
-      DURATION_SECONDS: "0"
+    image: curlimages/curl:latest
+    entrypoint: >
+      sh -c "
+        echo 'Waiting for api-gateway...';
+        until curl -sf http://api-gateway:8080/health; do sleep 2; done;
+        echo 'Starting traffic generation';
+        while true; do
+          curl -sf -X POST http://api-gateway:8080/payments
+            -H 'Content-Type: application/json'
+            -d '{\"from_account_id\":\"00000000-0000-0000-0000-000000000001\",\"to_account_id\":\"00000000-0000-0000-0000-000000000002\",\"amount\":100.00,\"currency\":\"USD\"}';
+          sleep 2;
+        done
+      "
     depends_on:
-      - api-gateway
-    networks:
-      - payflow
+      api-gateway:
+        condition: service_healthy
 
-networks:
-  payflow:
-    driver: bridge
+volumes:
+  postgres_data:

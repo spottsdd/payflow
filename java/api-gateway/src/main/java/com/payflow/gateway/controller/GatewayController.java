@@ -1,4 +1,4 @@
-package com.payflow.gateway;
+package com.payflow.gateway.controller;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -11,12 +11,12 @@ import java.math.BigDecimal;
 import java.util.Map;
 
 @RestController
-public class Controller {
+public class GatewayController {
 
     private final RestTemplate restTemplate;
     private final String orchestratorUrl;
 
-    public Controller(
+    public GatewayController(
             RestTemplate restTemplate,
             @Value("${orchestrator.url}") String orchestratorUrl) {
         this.restTemplate = restTemplate;
@@ -31,29 +31,22 @@ public class Controller {
     @PostMapping("/payments")
     public ResponseEntity<String> createPayment(@RequestBody PaymentRequest body) {
         if (body == null) {
-            return ResponseEntity.badRequest().body("{\"error\":\"request body is required\"}");
+            return badRequest("request body is required");
         }
-
         if (isBlank(body.fromAccountId())) {
             return badRequest("from_account_id is required");
         }
         if (isBlank(body.toAccountId())) {
             return badRequest("to_account_id is required");
         }
-        if (body.amount() == null) {
-            return badRequest("amount is required");
-        }
-        if (isBlank(body.currency())) {
-            return badRequest("currency is required");
-        }
-        if (body.amount().compareTo(BigDecimal.ZERO) <= 0) {
+        if (body.amount() == null || body.amount().compareTo(BigDecimal.ZERO) <= 0) {
             return badRequest("amount must be greater than 0");
+        }
+        if (isBlank(body.currency()) || body.currency().length() != 3) {
+            return badRequest("currency must be a 3-character code");
         }
         if (body.fromAccountId().equals(body.toAccountId())) {
             return badRequest("from_account_id and to_account_id must be different");
-        }
-        if (body.currency().length() != 3) {
-            return badRequest("currency must be a 3-character code");
         }
 
         try {

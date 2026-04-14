@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=builder /app .
 EXPOSE 8084
 ENV ASPNETCORE_URLS=http://+:8084
-ENTRYPOINT ["dotnet", "SettlementService.dll"]
+CMD ["dotnet", "SettlementService.dll"]

@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=builder /app .
 EXPOSE 8081
 ENV ASPNETCORE_URLS=http://+:8081
-ENTRYPOINT ["dotnet", "PaymentOrchestrator.dll"]
+CMD ["dotnet", "PaymentOrchestrator.dll"]

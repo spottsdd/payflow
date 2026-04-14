@@ -1,55 +1,59 @@
-using System.Net.Http.Json;
+using System.Text.Json;
+using PaymentProcessor;
+
+static void Log(string level, string service, string message, object? extra = null)
+{
+    var entry = new Dictionary<string, object?>
+    {
+        ["timestamp"] = DateTime.UtcNow.ToString("o"),
+        ["level"] = level,
+        ["service"] = service,
+        ["message"] = message,
+        ["trace_id"] = "",
+        ["span_id"] = "",
+    };
+    if (extra != null)
+        foreach (var prop in extra.GetType().GetProperties())
+            entry[prop.Name] = prop.GetValue(extra);
+    Console.WriteLine(JsonSerializer.Serialize(entry));
+}
+
+var jsonOpts = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    PropertyNameCaseInsensitive = true,
+};
+
+var gatewayStubUrl = Environment.GetEnvironmentVariable("GATEWAY_STUB_URL")
+    ?? "http://gateway-stub:9999";
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(options =>
+builder.Services.ConfigureHttpJsonOptions(o =>
 {
-    options.JsonWriterOptions = new() { Indented = false };
-    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+    o.SerializerOptions.PropertyNameCaseInsensitive = true;
 });
-builder.Services.AddHttpClient();
+
+builder.Services.AddHttpClient("gateway", c =>
+    c.BaseAddress = new Uri(gatewayStubUrl));
 
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-app.MapPost("/process", async (ProcessRequest req, IHttpClientFactory factory, IConfiguration config, ILogger<Program> logger) =>
+app.MapPost("/process", async (ProcessRequest req, IHttpClientFactory factory) =>
 {
-    using var scope = logger.BeginScope(new Dictionary<string, object>
-    {
-        ["service"] = "payment-processor",
-        ["trace_id"] = "",
-        ["span_id"] = ""
-    });
+    Log("INFO", "payment-processor", "processing payment",
+        new { payment_id = req.PaymentId, amount = req.Amount });
 
-    var gatewayStubUrl = config["GATEWAY_STUB_URL"] ?? "http://gateway-stub:9999";
-    var client = factory.CreateClient();
+    var client = factory.CreateClient("gateway");
+    var chargeReq = new GatewayChargeRequest(req.PaymentId, req.Amount, req.Currency);
+    var resp = await client.PostAsJsonAsync("/charge", chargeReq, jsonOpts);
+    resp.EnsureSuccessStatusCode();
 
-    try
-    {
-        var response = await client.PostAsJsonAsync($"{gatewayStubUrl}/charge",
-            new { payment_id = req.payment_id, amount = req.amount, currency = req.currency });
-
-        if (!response.IsSuccessStatusCode)
-        {
-            logger.LogWarning("Gateway returned {StatusCode} for payment {PaymentId}",
-                (int)response.StatusCode, req.payment_id);
-            return Results.Ok(new { status = "DECLINED", transaction_id = "" });
-        }
-
-        var result = await response.Content.ReadFromJsonAsync<GatewayResult>();
-        logger.LogInformation("Gateway response for {PaymentId}: {Status}", req.payment_id, result?.status);
-        return Results.Ok(new { status = result?.status ?? "DECLINED", transaction_id = result?.transaction_id ?? "" });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Gateway charge failed for payment {PaymentId}", req.payment_id);
-        return Results.Ok(new { status = "DECLINED", transaction_id = "" });
-    }
+    var result = await resp.Content.ReadFromJsonAsync<GatewayChargeResponse>(jsonOpts);
+    return Results.Ok(new ProcessResponse(result!.Status, result.TransactionId));
 });
 
 app.Run();
-
-record ProcessRequest(string payment_id, decimal amount, string currency);
-record GatewayResult(string status, string transaction_id);

@@ -15,37 +15,36 @@ spec:
     spec:
       containers:
         - name: api-gateway
-          image: api-gateway:latest
+          image: payflow/api-gateway:latest
           ports:
             - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+            - secretRef:
+                name: payflow-secret
           readinessProbe:
             httpGet:
               path: /health
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 5
-          resources:
-            limits:
-              memory: 256Mi
-              cpu: 250m
-            requests:
-              memory: 128Mi
-              cpu: 125m
-          envFrom:
-            - configMapRef:
-                name: payflow-config
-            - secretRef:
-                name: payflow-secret
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
 ---
-# For production, change type to LoadBalancer or use an Ingress resource
 apiVersion: v1
 kind: Service
 metadata:
   name: api-gateway
   namespace: payflow
 spec:
+  type: ClusterIP
   selector:
     app: api-gateway
   ports:
-    - port: 80
+    - port: 8080
       targetPort: 8080

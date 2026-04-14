@@ -15,27 +15,26 @@ spec:
     spec:
       containers:
         - name: settlement-service
-          image: settlement-service:latest
+          image: payflow/settlement-service:latest
           ports:
             - containerPort: 8084
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+            - secretRef:
+                name: payflow-secret
           readinessProbe:
             httpGet:
               path: /health
               port: 8084
             initialDelaySeconds: 10
             periodSeconds: 5
-          resources:
-            limits:
-              memory: 256Mi
-              cpu: 250m
-            requests:
-              memory: 128Mi
-              cpu: 125m
-          envFrom:
-            - configMapRef:
-                name: payflow-config
-            - secretRef:
-                name: payflow-secret
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8084
+            initialDelaySeconds: 30
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service
@@ -43,8 +42,9 @@ metadata:
   name: settlement-service
   namespace: payflow
 spec:
+  type: ClusterIP
   selector:
     app: settlement-service
   ports:
-    - port: 80
+    - port: 8084
       targetPort: 8084

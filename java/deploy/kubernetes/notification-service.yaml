@@ -1,4 +1,3 @@
-# No Service needed — notification-service is a Kafka consumer only
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,24 +15,23 @@ spec:
     spec:
       containers:
         - name: notification-service
-          image: notification-service:latest
+          image: payflow/notification-service:latest
           ports:
             - containerPort: 8085
+          envFrom:
+            - configMapRef:
+                name: payflow-config
+            - secretRef:
+                name: payflow-secret
           readinessProbe:
             httpGet:
               path: /health
               port: 8085
             initialDelaySeconds: 10
             periodSeconds: 5
-          resources:
-            limits:
-              memory: 256Mi
-              cpu: 250m
-            requests:
-              memory: 128Mi
-              cpu: 125m
-          envFrom:
-            - configMapRef:
-                name: payflow-config
-            - secretRef:
-                name: payflow-secret
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 30
+            periodSeconds: 10

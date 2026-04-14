@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=builder /app .
 EXPOSE 8083
 ENV ASPNETCORE_URLS=http://+:8083
-ENTRYPOINT ["dotnet", "PaymentProcessor.dll"]
+CMD ["dotnet", "PaymentProcessor.dll"]

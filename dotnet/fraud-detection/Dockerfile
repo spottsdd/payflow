@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=builder /app .
 EXPOSE 8082
 ENV ASPNETCORE_URLS=http://+:8082
-ENTRYPOINT ["dotnet", "FraudDetection.dll"]
+CMD ["dotnet", "FraudDetection.dll"]
