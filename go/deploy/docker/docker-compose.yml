@@ -47,7 +47,7 @@ services:
       - "9999:9999"
     environment:
       PORT: "9999"
-      STUB_FAILURE_RATE: "0.05"
+      STUB_FAILURE_RATE: "0.1"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9999/health"]
       interval: 10s
@@ -177,8 +177,8 @@ services:
     restart: on-failure
     environment:
       GATEWAY_URL: http://api-gateway:8080
-      REQUESTS_PER_SECOND: "5"
-      CONCURRENCY: "3"
+      REQUESTS_PER_SECOND: "10"
+      CONCURRENCY: "5"
     depends_on:
       api-gateway:
         condition: service_healthy

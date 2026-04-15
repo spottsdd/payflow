@@ -1,14 +1,16 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: payflow
-
 resources:
   - namespace.yaml
   - configmap.yaml
   - secret.yaml
+  - postgres.yaml
+  - kafka.yaml
+  - gateway-stub.yaml
   - api-gateway.yaml
   - payment-orchestrator.yaml
   - fraud-detection.yaml
   - payment-processor.yaml
   - settlement-service.yaml
   - notification-service.yaml
+  - traffic-generator.yaml

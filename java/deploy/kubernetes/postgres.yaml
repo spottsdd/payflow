@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: payflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: payflow
+            - name: POSTGRES_USER
+              value: payflow
+            - name: POSTGRES_PASSWORD
+              value: payflow
+          volumeMounts:
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "payflow"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "payflow"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: init-sql
+          configMap:
+            name: postgres-init
+        - name: postgres-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: payflow
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: payflow
+data:
+  init.sql: |
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    CREATE TABLE IF NOT EXISTS payments (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        from_account_id UUID NOT NULL,
+        to_account_id UUID NOT NULL,
+        amount DECIMAL(12, 2) NOT NULL,
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        fraud_decision VARCHAR(20),
+        transaction_id VARCHAR(100),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS accounts (
+        id UUID PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS settlements (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        payment_id UUID NOT NULL REFERENCES payments(id),
+        from_account_id UUID NOT NULL,
+        to_account_id UUID NOT NULL,
+        amount DECIMAL(12, 2) NOT NULL,
+        settled_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        payment_id UUID NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        payload JSONB,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+    CREATE INDEX IF NOT EXISTS idx_payments_from ON payments(from_account_id);
+    CREATE INDEX IF NOT EXISTS idx_settlements_payment ON settlements(payment_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_payment ON notifications(payment_id);
+
+    INSERT INTO accounts (id, name, balance, currency) VALUES
+        ('a1000000-0000-0000-0000-000000000001', 'Alice',   50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000002', 'Bob',     50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000003', 'Charlie', 50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000004', 'Diana',   50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000005', 'Eve',     50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000006', 'Frank',   50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000007', 'Grace',   50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000008', 'Hank',    50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000009', 'Ivy',     50000.00, 'USD'),
+        ('a1000000-0000-0000-0000-000000000010', 'Jack',    50000.00, 'USD')
+    ON CONFLICT (id) DO NOTHING;

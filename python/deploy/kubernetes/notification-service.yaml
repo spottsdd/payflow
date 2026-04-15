@@ -34,3 +34,15 @@ spec:
                 configMapKeyRef:
                   name: payflow-config
                   key: KAFKA_BROKERS
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 30
+            periodSeconds: 10
