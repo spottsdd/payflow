@@ -45,7 +45,11 @@ post '/process' do
   log('info', 'processing payment', payment_id: payment_id)
 
   begin
-    resp = Faraday.new(url: GATEWAY_STUB_URL) { |f| f.request :json }.post(
+    resp = Faraday.new(url: GATEWAY_STUB_URL) { |f|
+      f.request :json
+      f.options.timeout = 10
+      f.options.open_timeout = 5
+    }.post(
       '/charge',
       { payment_id: payment_id, amount: amount, currency: currency }.to_json,
       'Content-Type' => 'application/json'

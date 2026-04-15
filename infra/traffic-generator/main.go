@@ -43,15 +43,17 @@ func randomPair() (string, string) {
 	return accountIDs[from], accountIDs[to]
 }
 
-// Traffic mix per spec:
-// 75% normal ($1–$500), 15% flagged ($500–$2000), 10% denied (>$10000)
+// Traffic mix:
+// 75% normal ($1–$500)      → fraud APPROVE
+// 15% flagged ($2001–$9999) → fraud FLAG (threshold: >$2000)
+// 10% denied (>$10000)      → fraud DENY (threshold: >$10000)
 func randomAmount() float64 {
 	r := rand.Float64()
 	switch {
 	case r < 0.75:
 		return 1 + rand.Float64()*499
 	case r < 0.90:
-		return 500 + rand.Float64()*1500
+		return 2001 + rand.Float64()*7998
 	default:
 		return 10001 + rand.Float64()*9999
 	}

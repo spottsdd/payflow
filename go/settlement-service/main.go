@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	"errors"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -87,11 +89,15 @@ func main() {
 		).Scan(&balance)
 		if err != nil {
 			tx.Rollback(context.Background())
-			logEntry("error", serviceName, "balance query failed", map[string]any{
-				"payment_id": req.PaymentID,
-				"error":      err.Error(),
-			})
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "account not found"})
+			if errors.Is(err, pgx.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+			} else {
+				logEntry("error", serviceName, "balance query failed", map[string]any{
+					"payment_id": req.PaymentID,
+					"error":      err.Error(),
+				})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			}
 			return
 		}
 

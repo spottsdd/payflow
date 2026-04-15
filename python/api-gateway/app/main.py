@@ -42,7 +42,7 @@ async def create_payment(request: Request):
 
     log("INFO", "forwarding payment request", from_account_id=from_account_id, amount=amount)
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{ORCHESTRATOR_URL}/payments", json=body)
 
     return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -50,7 +50,7 @@ async def create_payment(request: Request):
 
 @app.get("/payments/{payment_id}")
 async def get_payment(payment_id: str):
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(f"{ORCHESTRATOR_URL}/payments/{payment_id}")
 
     return JSONResponse(status_code=resp.status_code, content=resp.json())

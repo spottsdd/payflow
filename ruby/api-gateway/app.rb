@@ -36,6 +36,8 @@ def orchestrator
   Faraday.new(url: ORCHESTRATOR_URL) do |f|
     f.request :json
     f.response :raise_error
+    f.options.timeout = 30
+    f.options.open_timeout = 5
   end
 end
 

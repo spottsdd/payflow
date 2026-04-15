@@ -31,7 +31,7 @@ app.post('/payments', async (req, res) => {
   }
 
   try {
-    const response = await axios.post(`${ORCHESTRATOR_URL}/payments`, req.body);
+    const response = await axios.post(`${ORCHESTRATOR_URL}/payments`, req.body, { timeout: 30000 });
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {
@@ -44,7 +44,7 @@ app.post('/payments', async (req, res) => {
 
 app.get('/payments/:id', async (req, res) => {
   try {
-    const response = await axios.get(`${ORCHESTRATOR_URL}/payments/${req.params.id}`);
+    const response = await axios.get(`${ORCHESTRATOR_URL}/payments/${req.params.id}`, { timeout: 30000 });
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {

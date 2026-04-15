@@ -1,53 +1,58 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:17-alpine
     environment:
+      POSTGRES_DB: payflow
       POSTGRES_USER: payflow
       POSTGRES_PASSWORD: payflow
-      POSTGRES_DB: payflow
-    ports:
-      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U payflow -d payflow"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   kafka:
-    image: bitnami/kafka:latest
-    environment:
-      - KAFKA_CFG_NODE_ID=0
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    hostname: kafka
+    image: confluentinc/cp-kafka:8.0.3
     ports:
       - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     healthcheck:
-      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
-      interval: 15s
-      timeout: 10s
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
       retries: 10
-      start_period: 30s
 
   gateway-stub:
-    image: node:24-slim
-    command: >
-      node -e "
-      const http=require('http');const crypto=require('crypto');
-      http.createServer((req,res)=>{
-        res.writeHead(200,{'Content-Type':'application/json'});
-        res.end(JSON.stringify({status:'APPROVED',transaction_id:crypto.randomUUID()}));
-      }).listen(9999,'0.0.0.0',()=>console.log('gateway-stub on 9999'));
-      "
+    build: ../../../infra/gateway-stub
+    environment:
+      PORT: "9999"
+      STUB_FAILURE_RATE: "0.1"
     ports:
       - "9999:9999"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   fraud-detection:
-    build:
-      context: ../../fraud-detection
+    build: ../../fraud-detection
     ports:
       - "8082:8082"
     environment:
@@ -60,15 +65,15 @@ services:
       retries: 5
 
   payment-processor:
-    build:
-      context: ../../payment-processor
+    build: ../../payment-processor
     ports:
       - "8083:8083"
     environment:
       PORT: "8083"
       GATEWAY_STUB_URL: http://gateway-stub:9999
     depends_on:
-      - gateway-stub
+      gateway-stub:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/health"]
       interval: 10s
@@ -76,8 +81,7 @@ services:
       retries: 5
 
   settlement-service:
-    build:
-      context: ../../settlement-service
+    build: ../../settlement-service
     ports:
       - "8084:8084"
     environment:
@@ -93,8 +97,7 @@ services:
       retries: 5
 
   payment-orchestrator:
-    build:
-      context: ../../payment-orchestrator
+    build: ../../payment-orchestrator
     ports:
       - "8081:8081"
     environment:
@@ -125,8 +128,7 @@ services:
       retries: 5
 
   notification-service:
-    build:
-      context: ../../notification-service
+    build: ../../notification-service
     ports:
       - "8085:8085"
     environment:
@@ -145,8 +147,7 @@ services:
       retries: 5
 
   api-gateway:
-    build:
-      context: ../../api-gateway
+    build: ../../api-gateway
     ports:
       - "8080:8080"
     environment:
@@ -162,26 +163,14 @@ services:
       retries: 5
 
   traffic-generator:
-    image: node:24-slim
-    restart: on-failure
-    command: >
-      node -e "
-      const http=require('http');
-      function send(){
-        const body=JSON.stringify({
-          from_account_id:'11111111-1111-1111-1111-111111111111',
-          to_account_id:'22222222-2222-2222-2222-222222222222',
-          amount:Math.floor(Math.random()*5000)+1,
-          currency:'USD'
-        });
-        const opts={host:'api-gateway',port:8080,path:'/payments',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}};
-        const req=http.request(opts,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log(new Date().toISOString(),res.statusCode,d.slice(0,120)));});
-        req.on('error',e=>console.error(e.message));
-        req.write(body);
-        req.end();
-      }
-      setInterval(send,2000);
-      "
+    build: ../../../infra/traffic-generator
+    environment:
+      GATEWAY_URL: http://api-gateway:8080
+      REQUESTS_PER_SECOND: "10"
+      CONCURRENCY: "5"
     depends_on:
       api-gateway:
         condition: service_healthy
+
+volumes:
+  postgres_data:

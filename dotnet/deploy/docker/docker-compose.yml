@@ -1,14 +1,13 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: payflow
       POSTGRES_USER: payflow
       POSTGRES_PASSWORD: payflow
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U payflow -d payflow"]
       interval: 5s
@@ -16,49 +15,44 @@ services:
       retries: 10
 
   kafka:
-    image: bitnami/kafka:3.7
-    environment:
-      KAFKA_CFG_NODE_ID: 1
-      KAFKA_CFG_PROCESS_ROLES: broker,controller
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    hostname: kafka
+    image: confluentinc/cp-kafka:8.0.3
     ports:
       - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 10s
-      timeout: 10s
+      timeout: 5s
       retries: 10
 
   gateway-stub:
-    image: python:3.12-alpine
-    command: >
-      python -c "
-      import http.server, json, uuid
-      class H(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-          self.send_response(200)
-          self.send_header('Content-Type', 'application/json')
-          self.end_headers()
-          self.wfile.write(json.dumps({'status':'APPROVED','transaction_id':str(uuid.uuid4())}).encode())
-        def log_message(self, *args): pass
-      http.server.HTTPServer(('', 9999), H).serve_forever()
-      "
+    build: ../../../infra/gateway-stub
+    environment:
+      PORT: "9999"
+      STUB_FAILURE_RATE: "0.1"
     ports:
       - "9999:9999"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9999/health')\" || exit 0"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9999/health"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   api-gateway:
-    build:
-      context: ../../api-gateway
+    build: ../../api-gateway
     ports:
       - "8080:8080"
     environment:
@@ -74,8 +68,7 @@ services:
       retries: 5
 
   payment-orchestrator:
-    build:
-      context: ../../payment-orchestrator
+    build: ../../payment-orchestrator
     ports:
       - "8081:8081"
     environment:
@@ -106,8 +99,7 @@ services:
       retries: 5
 
   fraud-detection:
-    build:
-      context: ../../fraud-detection
+    build: ../../fraud-detection
     ports:
       - "8082:8082"
     environment:
@@ -120,8 +112,7 @@ services:
       retries: 5
 
   payment-processor:
-    build:
-      context: ../../payment-processor
+    build: ../../payment-processor
     ports:
       - "8083:8083"
     environment:
@@ -137,8 +128,7 @@ services:
       retries: 5
 
   settlement-service:
-    build:
-      context: ../../settlement-service
+    build: ../../settlement-service
     ports:
       - "8084:8084"
     environment:
@@ -154,8 +144,7 @@ services:
       retries: 5
 
   notification-service:
-    build:
-      context: ../../notification-service
+    build: ../../notification-service
     ports:
       - "8085:8085"
     environment:
@@ -174,19 +163,11 @@ services:
       retries: 5
 
   traffic-generator:
-    image: curlimages/curl:latest
-    entrypoint: >
-      sh -c "
-        echo 'Waiting for api-gateway...';
-        until curl -sf http://api-gateway:8080/health; do sleep 2; done;
-        echo 'Starting traffic generation';
-        while true; do
-          curl -sf -X POST http://api-gateway:8080/payments
-            -H 'Content-Type: application/json'
-            -d '{\"from_account_id\":\"00000000-0000-0000-0000-000000000001\",\"to_account_id\":\"00000000-0000-0000-0000-000000000002\",\"amount\":100.00,\"currency\":\"USD\"}';
-          sleep 2;
-        done
-      "
+    build: ../../../infra/traffic-generator
+    environment:
+      GATEWAY_URL: http://api-gateway:8080
+      REQUESTS_PER_SECOND: "10"
+      CONCURRENCY: "5"
     depends_on:
       api-gateway:
         condition: service_healthy
