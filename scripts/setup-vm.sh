@@ -28,13 +28,14 @@ echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.
 apt-get update -y
 apt-get install -y kubectl
 
-# --- OpenJDK 25 ---
+# --- OpenJDK 25 + Maven ---
 apt-get install -y openjdk-25-jdk || {
   # Fallback: install via sdkman if package not available
   curl -s "https://get.sdkman.io" | bash
   source "$HOME/.sdkman/bin/sdkman-init.sh"
   sdk install java 25-open
 }
+apt-get install -y maven
 
 # --- Python 3.14.4 ---
 apt-get install -y python3.14 python3.14-venv python3-pip || {
@@ -78,6 +79,7 @@ gem install bundler --no-document
 echo ""
 echo "Setup complete. Runtime versions:"
 java -version 2>&1 | head -1
+mvn --version | head -1
 python3 --version
 node --version
 dotnet --version
